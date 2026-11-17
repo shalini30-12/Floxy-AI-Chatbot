@@ -6,7 +6,9 @@ with bcrypt, so plain-text passwords never touch the database.
 """
 import re
 import bcrypt
-from mysql.connector import Error
+import psycopg2
+from psycopg2 import Error
+from psycopg2.extras import RealDictCursor
 
 
 
@@ -69,7 +71,7 @@ class FloxyAuth:
             conn.close()
             return True, "Account created successfully. Please log in."
         except Error as e:
-            if "Duplicate entry" in str(e):
+            if "duplicate key value" in str(e) or getattr(e, 'pgcode', None) == '23505':
                 return False, "That username is already taken."
             return False, f"Database error: {e}"
 
@@ -79,7 +81,7 @@ class FloxyAuth:
     def verify_login(self, username, password):
         """Returns (user_dict or None, message: str)."""
         conn = self.db.get_connection()
-        cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("SELECT * FROM users WHERE username = %s", (username,))
         user = cur.fetchone()
         cur.close()
@@ -96,7 +98,7 @@ class FloxyAuth:
 
     def get_security_question(self, username):
         conn = self.db.get_connection()
-        cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("SELECT security_question FROM users WHERE username = %s", (username,))
         row = cur.fetchone()
         cur.close(); conn.close()
@@ -106,7 +108,7 @@ class FloxyAuth:
 
     def verify_security_answer(self, username, answer):
         conn = self.db.get_connection()
-        cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("SELECT security_answer FROM users WHERE username = %s", (username,))
         row = cur.fetchone()
         cur.close(); conn.close()
