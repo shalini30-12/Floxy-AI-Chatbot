@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+{% block title %}Chat · Floxy{% endblock %}
+{% block content %}
+<script>const FLOXY_NAME = {{ name|tojson }};</script>
+
+<div class="app-shell">
+    <button id="sidebar-toggle-btn" class="sidebar-toggle-btn" type="button" title="Toggle sidebar">◀</button> <button id="mobile-menu-btn" class="mobile-menu-btn" type="button">☰</button>
+    <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
+    <aside class="sidebar">
+        <div class="sidebar-top">
+                <div class="brand-mark small">
+                    <svg width="16" height="16" viewBox="0 0 30 30" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M6 24V9C6 7.3 7.3 6 9 6H22" stroke="#06090F" stroke-width="3.2" stroke-linecap="round"/>
+                        <path d="M11 15H20" stroke="#06090F" stroke-width="3.2" stroke-linecap="round"/>
+                        <circle cx="23.5" cy="23.5" r="2.5" fill="#06090F"/>
+                    </svg>
+                </div>
+                <span class="brand-name">Floxy<span class="ai-badge small">AI</span></span>
+    
+                <div class="theme-popover-wrap">
+                    <button type="button" id="theme-toggle-btn" class="history-icon-btn" title="Theme">✨</button>
+                    <div id="theme-popover" class="theme-popover">
+                        <button class="pill theme-btn" data-theme="light">☀️ Light</button>
+                        <button class="pill theme-btn" data-theme="dark">🌙 Dark</button>
+                        <button class="pill theme-btn" data-theme="system">🖥️ Default</button>
+                    </div>
+                </div>
+            </div>
+
+        <button type="button" id="new-chat-btn" class="new-chat-btn"> + New Chat</button>
+        <button type="button" id="poster-open-btn" class="poster-open-btn">🎨 Create Poster</button>
+
+        <div class="sidebar-section">
+            <div class="sidebar-label">Input mode</div>
+            <div class="mode-pills">
+                <button class="pill active" data-mode="text">Text</button>
+                <button class="pill" data-mode="voice">Voice</button>
+            </div>
+        </div>
+
+
+
+        <div class="sidebar-section">
+            <div class="sidebar-label">Attach a file</div>
+            <label class="file-drop" for="file-input">
+                <span>PDF · DOCX · TXT · Image</span>
+                <input type="file" id="file-input" accept=".pdf,.docx,.txt,.png,.jpg,.jpeg,.webp" multiple hidden>
+            </label>
+            <div id="file-preview" class="file-preview"></div>
+
+            <div id="active-doc-badge" class="active-doc-badge {% if not active_doc_name %}hidden{% endif %}">
+                <span id="active-doc-name">📄 {{ active_doc_name or '' }}</span>
+                <button id="clear-doc-btn" type="button" title="Stop using this document">✕</button>
+            </div>
+        </div>
+
+        <div class="sidebar-section history-section">
+            <div class="sidebar-label">Chat history</div>
+
+            <div class="history-row">
+                <button type="button" class="history-item active" data-date="">🆕 Today</button>
+            </div>
+
+            {% for d in chat_dates %}
+            <div class="history-row" data-row-date="{{ d.chat_date }}">
+                <button type="button" class="history-item {% if d.is_bookmarked %}bookmarked{% endif %}" data-date="{{ d.chat_date }}" data-bookmarked="{{ 'true' if d.is_bookmarked else 'false' }}" title="{{ d.title }}">
+                    <span class="hi-text">
+                        <span class="hi-title">{% if d.is_bookmarked %}⭐ {% endif %}{{ d.title }}</span>
+                        <span class="hi-date">{{ d.chat_date.strftime('%d %b %Y') }}</span>
+                    </span>
+                    <span class="count">{{ d.msg_count }}</span>
+                </button>
+                <div class="bookmark-menu-wrap">
+                    <button type="button" class="history-icon-btn kebab-btn" title="More options">⋮</button>
+                    <div class="bookmark-menu">
+                        <button type="button" class="bookmark-toggle-btn">⭐ Bookmark</button>
+                        <button type="button" class="pdf-btn">⬇️ Download</button>
+                        <button type="button" class="delete-btn danger-option">🗑️ Delete</button>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="sidebar-section">
+            <div class="sidebar-label">Bookmarked</div>
+            <div id="bookmarks-list" class="history-section"></div>
+        </div>
+
+        <div class="sidebar-bottom">
+            <div class="user-mini">
+                <div class="user-avatar small">{{ name[0]|upper }}</div>
+                <span class="user-mini-name">{{ name }}</span>
+            </div>
+            <a href="{{ url_for('logout') }}" class="logout-link">Log out</a>
+        </div>
+    </aside>
+
+    <main class="chat-main">
+        <div class="chat-scroll" id="chat-scroll"></div>
+
+
+        <div class="composer">
+            <div id="suggestions" class="suggestions"></div>
+            <div class="composer-row">
+                <button id="mic-btn" class="icon-btn" type="button" title="Voice input">🎙️</button>
+                <textarea id="msg-input" rows="1" placeholder="Message Floxy..."></textarea>
+                <button id="send-btn" class="icon-btn primary" type="button" title="Send">➤</button>
+            </div>
+            <div class="composer-hint" id="composer-hint">Text mode</div>
+        </div>
+    </main>
+</div>
+<div id="poster-modal" class="modal-backdrop" hidden>
+    <div class="modal">
+        <div class="modal-head">
+            <h3>🎨 Create poster</h3>
+            <button type="button" id="poster-close-btn" class="modal-close" title="Close">✕</button>
+        </div>
+
+        <form id="poster-form" autocomplete="off">
+            <div class="pf-grid">
+                <label>Type
+                    <select name="type" id="pf-type">
+                        <option value="event">Event / Invitation</option>
+                        <option value="sale">Sale / Offer</option>
+                        <option value="birthday">Birthday / Celebration</option>
+                        <option value="notice">Notice / Announcement</option>
+                        <option value="quote">Quote / Motivation</option>
+                        <option value="general">Simple / General</option>
+                    </select>
+                </label>
+                <label>Size
+                    <select name="size">
+                        {% for s in poster_sizes %}
+                        <option value="{{ s.id }}">{{ s.name }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+            </div>
+
+            <label><span id="pf-title-label">Title</span>
+                <textarea name="title" id="pf-title" rows="2" maxlength="120" required></textarea>
+            </label>
+
+            <label class="pf-row" data-field="subtitle"><span id="pf-sub-label">Subtitle</span>
+                <input type="text" name="subtitle" id="pf-subtitle" maxlength="160">
+            </label>
+            <label class="pf-row" data-field="highlight">Offer highlight
+                <input type="text" name="highlight" maxlength="30" placeholder="e.g. 50% OFF">
+            </label>
+            <label class="pf-row" data-field="details">Details (one line = one point)
+                <textarea name="details" rows="3" maxlength="600" placeholder="Free delivery above Rs 999&#10;Easy EMI available"></textarea>
+            </label>
+            <label class="pf-row" data-field="date">Date &amp; time
+                <input type="text" name="date" maxlength="80" placeholder="e.g. 15 Nov 2026, 10:00 AM">
+            </label>
+            <label class="pf-row" data-field="venue">Venue / address
+                <input type="text" name="venue" maxlength="120" placeholder="e.g. Main Auditorium, Delhi">
+            </label>
+            <label class="pf-row" data-field="contact">Contact / footer line
+                <input type="text" name="contact" maxlength="160" placeholder="e.g. Call 98765 43210 | www.example.com">
+            </label>
+
+            <div>
+                <div class="sidebar-label">Colour theme</div>
+                <div class="swatches">
+                    {% for t in poster_themes %}
+                    <label class="swatch" title="{{ t.name }}">
+                        <input type="radio" name="theme" value="{{ t.id }}" {% if loop.first %}checked{% endif %}>
+                        <span style="background: linear-gradient(135deg, {{ t.c1 }}, {{ t.c2 }});"></span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+
+            <label>Download as
+                <select name="format">
+                    <option value="png">PNG image</option>
+                    <option value="pdf">PDF</option>
+                </select>
+            </label>
+
+            <button type="submit" class="btn-primary">Create poster</button>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+{% endblock %}
