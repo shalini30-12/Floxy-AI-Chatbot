@@ -15,6 +15,7 @@ from PIL import Image
 from PIL import Image, ImageOps
 
 from config import Config
+from psycopg2.extras import RealDictCursor
 
 class FloxyEngine:
     def __init__(self, db_instance):
@@ -32,7 +33,7 @@ class FloxyEngine:
         """Returns (allowed: bool, calls_used_today: int)."""
         today = datetime.date.today()
         conn = self.db.get_connection()
-        cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("SELECT * FROM api_logs WHERE user_id = %s", (user_id,))
         row = cur.fetchone()
 
@@ -97,7 +98,7 @@ class FloxyEngine:
     
     def get_chat_history(self, user_id, limit=50, date=None):
         conn = self.db.get_connection()
-        cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
         if date:
             cur.execute(
                 "SELECT id, user_message, bot_response, attachment, created_at FROM chatbot_logs "
@@ -175,7 +176,7 @@ class FloxyEngine:
         """Every date this user has chatted on (newest first) with a heading, message count
         and whether that day is bookmarked."""
         conn = self.db.get_connection()
-        cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             "SELECT DATE(c.created_at) AS chat_date, COUNT(*) AS msg_count, "
             "MAX(CASE WHEN bd.id IS NOT NULL THEN 1 ELSE 0 END) AS is_bookmarked "
@@ -241,7 +242,7 @@ class FloxyEngine:
 
     def get_bookmarks(self, user_id):
         conn = self.db.get_connection()
-        cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             "SELECT c.id, c.user_message, c.bot_response FROM bookmarked_chats b "
             "JOIN chatbot_logs c ON b.log_id = c.id "
@@ -256,7 +257,7 @@ class FloxyEngine:
     def toggle_day_bookmark(self, user_id, date):
         """Returns True if now bookmarked, False if removed."""
         conn = self.db.get_connection()
-        cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("SELECT id FROM bookmarked_days WHERE user_id = %s AND chat_date = %s", (user_id, date))
         row = cur.fetchone()
         if row:
@@ -269,7 +270,7 @@ class FloxyEngine:
 
     def get_bookmarked_days(self, user_id):
         conn = self.db.get_connection()
-        cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             "SELECT bd.chat_date, COUNT(c.id) AS msg_count FROM bookmarked_days bd "
             "LEFT JOIN chatbot_logs c ON c.user_id = bd.user_id AND DATE(c.created_at) = bd.chat_date "
@@ -285,7 +286,7 @@ class FloxyEngine:
     
     def get_log_by_id(self, user_id, log_id):
         conn = self.db.get_connection()
-        cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             "SELECT id, user_message, bot_response FROM chatbot_logs WHERE id = %s AND user_id = %s",
             (log_id, user_id),
@@ -492,7 +493,7 @@ class FloxyEngine:
 
     def get_active_document(self, user_id):
         conn = self.db.get_connection()
-        cur = conn.cursor(dictionary=True)
+        cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("SELECT file_name, content FROM knowledge_base WHERE user_id = %s", (user_id,))
         row = cur.fetchone()
         cur.close(); conn.close()
