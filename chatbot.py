@@ -2,7 +2,7 @@
 chatbot.py
 Multi-Modal Intelligence and Synthesis Module.
 Talks to the Gemini API, extracts text from uploaded PDFs/DOCX/images,
-enforces a daily call quota per user, and logs every turn to MySQL.
+enforces a daily call quota per user, and logs every turn to PostgreSQL.
 """
 import os
 import re
@@ -11,7 +11,6 @@ import datetime
 import docx2txt
 from pypdf import PdfReader
 import google.generativeai as genai
-from PIL import Image
 from PIL import Image, ImageOps
 
 from config import Config
@@ -88,11 +87,12 @@ class FloxyEngine:
         cur = conn.cursor()
         cur.execute(
             "INSERT INTO chatbot_logs (user_id, user_message, bot_response, attachment) "
-            "VALUES (%s, %s, %s, %s)",
+            "VALUES (%s, %s, %s, %s) RETURNING id",
             (user_id, user_message, bot_response, attachment),
         )
+        row = cur.fetchone()
         conn.commit()
-        new_id = cur.lastrowid
+        new_id = row[0] if row else None
         cur.close(); conn.close()
         return new_id
     
@@ -108,7 +108,7 @@ class FloxyEngine:
         else:
             cur.execute(
                 "SELECT id, user_message, bot_response, attachment, created_at FROM chatbot_logs "
-                "WHERE user_id = %s AND DATE(created_at) = CURDATE() ORDER BY id ASC LIMIT %s",
+                "WHERE user_id = %s AND DATE(created_at) = CURRENT_DATE ORDER BY id ASC LIMIT %s",
                 (user_id, limit),
             )
         rows = cur.fetchall()
@@ -130,7 +130,6 @@ class FloxyEngine:
 
     @classmethod
     def _make_title(cls, msg):
-        """Short heading for a chat message (no AI used, so no quota)."""
         text = " ".join((msg or "").split())
         if not text:
             return ""
@@ -153,8 +152,6 @@ class FloxyEngine:
         return len(t) < 4 or t in cls._TRIVIAL
 
     def _day_titles(self, user_id):
-        """{date: heading} for every day this user has chatted. The heading comes from the
-        first real question of that day (greetings like 'hi' are skipped)."""
         conn = self.db.get_connection()
         cur = conn.cursor()
         cur.execute(
@@ -173,8 +170,6 @@ class FloxyEngine:
         return {day: (self._make_title(good.get(day) or first_any[day]) or "Chat") for day in first_any}
 
     def get_chat_dates(self, user_id):
-        """Every date this user has chatted on (newest first) with a heading, message count
-        and whether that day is bookmarked."""
         conn = self.db.get_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
@@ -192,8 +187,6 @@ class FloxyEngine:
         for r in rows:
             r["title"] = titles.get(r["chat_date"], "Chat")
         return rows
-
-
 
     def delete_chat_day(self, user_id, date):
         conn = self.db.get_connection()
@@ -214,7 +207,6 @@ class FloxyEngine:
         conn.commit(); cur.close(); conn.close()
 
     def get_attachment(self, user_id, log_id):
-        """Stored file name for this user's chat message, or None."""
         conn = self.db.get_connection()
         cur = conn.cursor()
         cur.execute(
@@ -229,7 +221,7 @@ class FloxyEngine:
         conn = self.db.get_connection()
         cur = conn.cursor()
         cur.execute(
-            "INSERT IGNORE INTO bookmarked_chats (user_id, log_id) VALUES (%s, %s)",
+            "INSERT INTO bookmarked_chats (user_id, log_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
             (user_id, log_id),
         )
         conn.commit(); cur.close(); conn.close()
@@ -253,9 +245,7 @@ class FloxyEngine:
         cur.close(); conn.close()
         return rows
 
-
     def toggle_day_bookmark(self, user_id, date):
-        """Returns True if now bookmarked, False if removed."""
         conn = self.db.get_connection()
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute("SELECT id FROM bookmarked_days WHERE user_id = %s AND chat_date = %s", (user_id, date))
@@ -296,13 +286,12 @@ class FloxyEngine:
         return row
 
     def images_to_pdf(self, file_storages):
-        """Joins the uploaded images (in the order given) into one PDF, one image per A4 page."""
         if not file_storages:
             raise ValueError("Koi image nahi mili.")
         if len(file_storages) > 20:
             raise ValueError("Ek baar mein maximum 20 images chalengi.")
 
-        A4_W, A4_H, MARGIN = 1240, 1754, 60   # A4 at 150 DPI
+        A4_W, A4_H, MARGIN = 1240, 1754, 60
         pages = []
         for fs in file_storages:
             name = (fs.filename or "").lower()
@@ -310,7 +299,7 @@ class FloxyEngine:
                 raise ValueError(f"'{fs.filename}' image file nahi hai. Sirf PNG, JPG ya WEBP chalegi.")
 
             img = Image.open(fs.stream)
-            img = ImageOps.exif_transpose(img)  # phone photos ki sahi direction
+            img = ImageOps.exif_transpose(img)
             if img.mode in ("RGBA", "LA", "P"):
                 rgba = img.convert("RGBA")
                 flat = Image.new("RGB", rgba.size, (255, 255, 255))
@@ -319,7 +308,6 @@ class FloxyEngine:
             else:
                 img = img.convert("RGB")
 
-            # landscape photo -> landscape page, otherwise portrait page
             page_w, page_h = (A4_H, A4_W) if img.width > img.height else (A4_W, A4_H)
             img = ImageOps.contain(img, (page_w - 2 * MARGIN, page_h - 2 * MARGIN))
             page = Image.new("RGB", (page_w, page_h), (255, 255, 255))
@@ -331,10 +319,8 @@ class FloxyEngine:
         return buf.getvalue()
 
     def pdf_to_images(self, file_storage, fmt="png"):
-        """Renders every page of a PDF as an image. One page gives a single image,
-        several pages give one ZIP. Returns (bytes, mimetype, extension, page_count)."""
         import zipfile
-        import fitz  # PyMuPDF
+        import fitz
 
         fmt = "jpg" if fmt in ("jpg", "jpeg") else "png"
         try:
@@ -351,7 +337,7 @@ class FloxyEngine:
             if total > 30:
                 raise ValueError(f"PDF mein {total} pages hain. Ek baar mein maximum 30 pages chalenge.")
 
-            zoom = fitz.Matrix(150 / 72, 150 / 72)   # 150 DPI
+            zoom = fitz.Matrix(150 / 72, 150 / 72)
             images = []
             for page in doc:
                 pix = page.get_pixmap(matrix=zoom, alpha=False)
@@ -374,8 +360,6 @@ class FloxyEngine:
     
     @staticmethod
     def detect_music_request(text):
-        """Returns None if this isn't a 'play a song' request, otherwise
-        {'query': '<song name>'} (query is '' when no song name was given)."""
         t = (text or "").strip()
         if not t or len(t) > 200:
             return None
@@ -407,7 +391,6 @@ class FloxyEngine:
 
     @staticmethod
     def build_music_links(query):
-        """Search links for the song on the popular music apps/sites."""
         from urllib.parse import quote, quote_plus
         qp = quote_plus(query)
         qs = quote(query)
@@ -420,19 +403,15 @@ class FloxyEngine:
             {"name": "Apple Music", "icon": "🍎", "url": f"https://music.apple.com/in/search?term={qp}"},
             {"name": "Amazon Music", "icon": "📦", "url": f"https://music.amazon.in/search/{qs}"},
         ]
+
     @staticmethod
     def _pdf_safe(text):
-        """Helvetica (core PDF font) only supports Latin-1. Replace anything
-        it can't render (Hindi/Devanagari, emoji, etc.) so PDF export never crashes."""
         if not text:
             return ""
         return text.encode("latin-1", errors="replace").decode("latin-1")
-
     
     @staticmethod
     def _wrap_long_tokens(text, max_len=50):
-        """Breaks any single unbroken word/URL longer than max_len characters
-        into chunks, so fpdf's multi_cell always has somewhere to wrap."""
         def break_token(match):
             token = match.group(0)
             if len(token) <= max_len:
@@ -473,21 +452,18 @@ class FloxyEngine:
                 pdf.ln(3)
 
         return bytes(pdf.output())
-    
-    # ------------------------------------------------------------------
-    # Persistent "active document" knowledge base
-    # ------------------------------------------------------------------
+
     def save_active_document(self, user_id, file_name, content):
-        """Upserts this user's active document so future chat turns can reference it."""
         conn = self.db.get_connection()
         cur = conn.cursor()
         cur.execute(
             """
             INSERT INTO knowledge_base (user_id, file_name, content)
             VALUES (%s, %s, %s)
-            ON DUPLICATE KEY UPDATE file_name = VALUES(file_name), content = VALUES(content)
+            ON CONFLICT (user_id) DO UPDATE 
+            SET file_name = EXCLUDED.file_name, content = EXCLUDED.content
             """,
-            (user_id, file_name, content[:8000]),  # safety cap per document
+            (user_id, file_name, content[:8000]),
         )
         conn.commit(); cur.close(); conn.close()
 
@@ -497,7 +473,7 @@ class FloxyEngine:
         cur.execute("SELECT file_name, content FROM knowledge_base WHERE user_id = %s", (user_id,))
         row = cur.fetchone()
         cur.close(); conn.close()
-        return row  # dict with file_name/content, or None
+        return row
 
     def clear_active_document(self, user_id):
         conn = self.db.get_connection()
@@ -507,7 +483,6 @@ class FloxyEngine:
 
     @staticmethod
     def _friendly_error(e):
-        """Turns a Gemini error into a short message that says what actually went wrong."""
         text = str(e)
         low = text.lower()
         if "429" in text or "quota" in low or "resource_exhausted" in low or "rate limit" in low:
@@ -522,7 +497,6 @@ class FloxyEngine:
         return "AI se jawab nahi aa paya. Thodi der baad dobara try karo."
 
     def _time_context(self):
-        """Current India time, sent along with every prompt so Floxy can answer time/date questions."""
         ist = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
         now = datetime.datetime.now(ist)
         return (
@@ -536,10 +510,7 @@ class FloxyEngine:
         )
     
     def _generate_with_retry(self, prompt, max_retries=1):
-        """Calls Gemini over REST with a hard timeout, retrying once on transient errors."""
         import time
-
-        # Attach the current IST time to every request
         header = self._time_context()
         if isinstance(prompt, list):
             prompt = [header + prompt[0]] + list(prompt[1:])
@@ -559,13 +530,7 @@ class FloxyEngine:
                 raise
         raise last_error
 
-    # ------------------------------------------------------------------
-    # Core chat
-    # ------------------------------------------------------------------
     def send_message(self, user_id, text_prompt, search_mode="text"):
-        """Sends a text prompt to Gemini, logs it, and returns the reply string.
-        If the user has an active uploaded document, its content is included
-        as grounding context so questions about it work without re-uploading."""
         allowed, used = self.check_and_increment_quota(user_id)
         if not allowed:
             return f"Daily limit of {Config.DAILY_API_LIMIT} messages reached. Please try again tomorrow.", None        
@@ -593,11 +558,7 @@ class FloxyEngine:
         log_id = self.log_chat_interaction(user_id, text_prompt, reply)
         return reply, log_id
 
-    # ------------------------------------------------------------------
-    # File ingestion
-    # ------------------------------------------------------------------
     def extract_text_from_file(self, file_path):
-        """Reads PDF / DOCX / TXT into plain text. Returns '' for images (sent as-is to Gemini)."""
         ext = file_path.rsplit(".", 1)[-1].lower()
         try:
             if ext == "pdf":
@@ -613,7 +574,6 @@ class FloxyEngine:
         return ""
 
     def process_file_upload(self, user_id, file_path, user_prompt=""):
-        """Logs the upload, extracts/attaches content, and asks Gemini to analyse it."""
         file_name = os.path.basename(file_path)
         ext = file_name.rsplit(".", 1)[-1].lower()
         file_size_kb = f"{round(os.path.getsize(file_path) / 1024, 1)} KB"
@@ -635,9 +595,6 @@ class FloxyEngine:
 
         try:
             if ext in ("png", "jpg", "jpeg", "webp"):
-                # Send the image directly in the request (inline) instead of using the
-                # Files API — this skips the separate upload+processing wait and is
-                # much faster for normal-sized photos.
                 img = Image.open(file_path)
                 response = self._generate_with_retry([prompt, img])
             else:
@@ -651,14 +608,12 @@ class FloxyEngine:
             print("[Floxy] Gemini error:", e)
             reply = self._friendly_error(e)
 
-        log_id = self.log_chat_interaction(user_id, f"[Uploaded file: {file_name}] {prompt}", reply)
+        log_id = self.log_chat_history_or_interaction_placeholder = self.log_chat_interaction(
+            user_id, f"[Uploaded file: {file_name}] {prompt}", reply
+        )
         return reply, log_id
 
-    # ------------------------------------------------------------------
-    # Autocomplete suggestions
-    # ------------------------------------------------------------------
     def get_live_suggestions(self, partial_text):
-        """Asks Gemini for 3 short autocomplete continuations of the user's partial input."""
         if not partial_text or len(partial_text.strip()) < 3:
             return []
         try:
