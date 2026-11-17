@@ -1,11 +1,11 @@
 """
 database.py
 Relational Persistence & Schema Engine.
-Handles the MySQL connection and auto-creates every table Floxy needs
+Handles the PostgreSQL connection and auto-creates every table Floxy needs
 on first run, so a fresh clone of the project needs zero manual SQL.
 """
-import mysql.connector
-from mysql.connector import Error
+import psycopg2
+from psycopg2 import Error
 from config import Config
 
 
@@ -21,35 +21,27 @@ class FloxyDatabase:
     # Connections
     # ------------------------------------------------------------------
     def get_connection(self, with_db=True):
-        """Return a fresh MySQL connection (caller is responsible for closing it)."""
-        return mysql.connector.connect(
+        """Return a fresh PostgreSQL connection (caller is responsible for closing it)."""
+        return psycopg2.connect(
             host=self.host,
             port=self.port,
             user=self.user,
             password=self.password,
-            database=self.db_name if with_db else None,
+            dbname=self.db_name if with_db else "postgres",
         )
 
     # ------------------------------------------------------------------
     # Schema bootstrap
     # ------------------------------------------------------------------
     def init_database(self):
-        """Creates the floxy_db database (if missing) and every table."""
-        # 1. Make sure the database itself exists
-        conn = self.get_connection(with_db=False)
-        cur = conn.cursor()
-        cur.execute(f"CREATE DATABASE IF NOT EXISTS {self.db_name}")
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        # 2. Create tables inside that database
+        """Creates every table in PostgreSQL if missing."""
         conn = self.get_connection(with_db=True)
+        conn.autocommit = True
         cur = conn.cursor()
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                id INT AUTO_INCREMENT PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 name VARCHAR(100) NOT NULL,
                 username VARCHAR(50) UNIQUE NOT NULL,
                 mobile VARCHAR(15) NOT NULL,
@@ -61,19 +53,20 @@ class FloxyDatabase:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        
         for ddl in (
-            "ALTER TABLE users ADD COLUMN security_question VARCHAR(255) NOT NULL DEFAULT ''",
-            "ALTER TABLE users ADD COLUMN security_answer VARCHAR(255) NOT NULL DEFAULT ''",
-            "ALTER TABLE users ADD COLUMN state VARCHAR(50) NOT NULL DEFAULT ''",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS security_question VARCHAR(255) NOT NULL DEFAULT ''",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS security_answer VARCHAR(255) NOT NULL DEFAULT ''",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS state VARCHAR(50) NOT NULL DEFAULT ''",
         ):
             try:
                 cur.execute(ddl)
             except Error:
-                pass
+                conn.rollback()
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS chatbot_logs (
-                id INT AUTO_INCREMENT PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 user_id INT NOT NULL,
                 user_message TEXT NOT NULL,
                 bot_response TEXT NOT NULL,
@@ -84,7 +77,7 @@ class FloxyDatabase:
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS search_history (
-                id INT AUTO_INCREMENT PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 user_id INT NOT NULL,
                 search_text TEXT NOT NULL,
                 search_mode VARCHAR(30) NOT NULL,
@@ -95,7 +88,7 @@ class FloxyDatabase:
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS uploaded_files (
-                id INT AUTO_INCREMENT PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 user_id INT NOT NULL,
                 file_name VARCHAR(255) NOT NULL,
                 file_type VARCHAR(20) NOT NULL,
@@ -107,7 +100,7 @@ class FloxyDatabase:
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS api_logs (
-                id INT AUTO_INCREMENT PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 user_id INT NOT NULL UNIQUE,
                 api_calls_count INT DEFAULT 0,
                 last_call_date DATE NOT NULL,
@@ -117,49 +110,46 @@ class FloxyDatabase:
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS knowledge_base (
-                id INT AUTO_INCREMENT PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 user_id INT NOT NULL UNIQUE,
                 file_name VARCHAR(255) NOT NULL,
-                content LONGTEXT NOT NULL,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                content TEXT NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS bookmarked_days (
-                id INT AUTO_INCREMENT PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 user_id INT NOT NULL,
                 chat_date DATE NOT NULL,
                 saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE KEY unique_day_bookmark (user_id, chat_date),
+                CONSTRAINT unique_day_bookmark UNIQUE (user_id, chat_date),
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
             )
         """)
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS bookmarked_chats (
-                id INT AUTO_INCREMENT PRIMARY KEY,
+                id SERIAL PRIMARY KEY,
                 user_id INT NOT NULL,
                 log_id INT NOT NULL,
                 saved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE KEY unique_bookmark (user_id, log_id),
+                CONSTRAINT unique_bookmark UNIQUE (user_id, log_id),
                 FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
                 FOREIGN KEY (log_id) REFERENCES chatbot_logs(id) ON DELETE CASCADE
             )
         """)
-                # Migration: generated files (PDF / images) attached to a chat message
+        
         try:
-            cur.execute("ALTER TABLE chatbot_logs ADD COLUMN attachment VARCHAR(255) NULL")
+            cur.execute("ALTER TABLE chatbot_logs ADD COLUMN IF NOT EXISTS attachment VARCHAR(255) NULL")
         except Error:
-            pass  # column already exists
+            conn.rollback()
 
-        conn.commit()
         cur.close()
         conn.close()
-        print("[Floxy] Database ready: all tables verified/created.")
+        print("[Floxy] PostgreSQL Database ready: all tables verified/created.")
 
 
 if __name__ == "__main__":
-    # Run "python database.py" once to set up MySQL by hand if you want.
     FloxyDatabase().init_database()

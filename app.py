@@ -73,7 +73,7 @@ def _file_info(row):
     }
 
 db = FloxyDatabase()
-# db.init_database()
+db.init_database()
 auth_manager = FloxyAuth(db)
 ai_engine = FloxyEngine(db)
 
