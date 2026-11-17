@@ -4,6 +4,7 @@ Relational Persistence & Schema Engine.
 Handles the PostgreSQL connection and auto-creates every table Floxy needs
 on first run, so a fresh clone of the project needs zero manual SQL.
 """
+import os
 import psycopg2
 from psycopg2 import Error
 from config import Config
@@ -21,14 +22,8 @@ class FloxyDatabase:
     # Connections
     # ------------------------------------------------------------------
     def get_connection(self, with_db=True):
-        """Return a fresh PostgreSQL connection (caller is responsible for closing it)."""
-        return psycopg2.connect(
-            host=self.host,
-            port=self.port,
-            user=self.user,
-            password=self.password,
-            dbname=self.db_name if with_db else "postgres",
-        )
+        # Seedha Render ke environment se DATABASE_URL utha lega
+        return psycopg2.connect(os.environ.get("DATABASE_URL"))
 
     # ------------------------------------------------------------------
     # Schema bootstrap
